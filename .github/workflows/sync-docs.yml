@@ -1,0 +1,48 @@
+name: Sync Docs from backBet
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"  # a cada 6 horas (ajuste se quiser)
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout do REPO-SITE
+      - name: Checkout this repo (REPO-SITE)
+        uses: actions/checkout@v3
+
+      # 2. Checkout do repositório privado backBet
+      - name: Checkout private repo (backBet)
+        uses: actions/checkout@v3
+        with:
+          repository: dioneyfroes-coder/backBet
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: backBetPrivate
+
+      # 3. Copiar docs do repo privado para a pasta oficial /docs do REPO-SITE
+      - name: Sync docs
+        run: |
+          rm -rf docs
+          mkdir docs
+          cp -R backBetPrivate/docs/* docs/
+
+      # 4. Rodar limpeza (se quiser)
+      - name: Clean docs
+        run: |
+          node scripts/clean-docs.js --quiet
+
+      # 5. Commit se houver mudanças
+      - name: Commit changes
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add -A
+          if git diff-index --quiet HEAD; then
+            echo "Sem mudanças."
+          else
+            git commit -m "Sync docs from backBet"
+            git push
+          fi

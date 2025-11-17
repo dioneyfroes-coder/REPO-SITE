@@ -1,0 +1,15 @@
+site_name: Backend Documentation
+theme:
+  name: material
+  language: pt
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.sections
+
+plugins:
+  - search
+  - awesome-pages
+
+nav:
+  - Home: index.md
