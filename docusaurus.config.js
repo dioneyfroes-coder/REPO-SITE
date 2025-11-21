@@ -24,7 +24,6 @@ const config = {
         sidebarPath: require.resolve('./sidebars.js'),
       },
     ],
-    require.resolve('./plugins/sync-backend-docs'),
   ],
 
   organizationName: 'facebook',

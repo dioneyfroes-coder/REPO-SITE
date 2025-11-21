@@ -5,7 +5,7 @@
   "scripts": {
     "docusaurus": "docusaurus",
     "start": "docusaurus start",
-    "sync-docs": "rm -rf docs-source && git clone --depth=1 https://$GITHUB_TOKEN@github.com/dioneyfroes-coder/backBet.git temp && mv temp/docs docs-source && rm -rf temp",
+    "sync-docs": "rm -rf docs-source && git clone --depth=1 https://$GH_PAT@github.com/dioneyfroes-coder/backBet.git temp && mv temp/docs docs-source && rm -rf temp",
     "build": "docusaurus build",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",

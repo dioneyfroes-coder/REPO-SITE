@@ -3,7 +3,7 @@ name: Sync Docs from backBet
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"  # a cada 6 horas (ajuste se quiser)
+    - cron: "0 */12 * * *"  # a cada 12 horas (ajuste se quiser)
 
 jobs:
   sync:
@@ -19,15 +19,14 @@ jobs:
         uses: actions/checkout@v3
         with:
           repository: dioneyfroes-coder/backBet
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_PAT }}
           path: backBetPrivate
 
       # 3. Copiar docs do repo privado para a pasta oficial /docs do REPO-SITE
       - name: Sync docs
-        run: |
-          rm -rf docs
-          mkdir docs
-          cp -R backBetPrivate/docs/* docs/
+        run: npm run sync-docs
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
 
       # 4. Rodar limpeza (se quiser)
       - name: Clean docs
