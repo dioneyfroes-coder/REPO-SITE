@@ -28,11 +28,6 @@ jobs:
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
 
-      # 4. Rodar limpeza (se quiser)
-      - name: Clean docs
-        run: |
-          node scripts/clean-docs.js --quiet
-
       # 5. Commit se houver mudanças
       - name: Commit changes
         run: |
