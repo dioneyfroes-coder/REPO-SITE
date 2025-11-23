@@ -28,6 +28,12 @@ jobs:
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
 
+      # 4. Checkout com PAT para garantir push
+      - name: Checkout with PAT
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
       # 5. Commit se houver mudanças
       - name: Commit changes
         run: |
