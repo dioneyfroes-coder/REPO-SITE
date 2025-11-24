@@ -1,0 +1,157 @@
+---
+title: "Módulo de Apostas"
+description: "Visão completa do domínio de betting: entidades, casos de uso, endpoints HTTP e integrações operacionais."
+slug: "/docs/betting"
+---
+
+# Core Betting
+
+> Responsável por gerenciar todo o ciclo de vida de apostas: consulta de mercados, débito de saldo, criação/cancelamento, resolução e publicação dos resultados.
+
+## Estrutura e limites
+
+```
+src/core/betting/
+	aplication/
+		errors/BetErrorMapper.ts
+		use-cases/*.ts
+	config/bet.ts
+	domain/
+		entities/{Bet,Event}.ts
+		factories/BetFactory.ts
+		repositories/*
+		services/BetService.ts
+		value-objects/{BetAmount,Odds}.ts
+	types/bet.types.ts
+src/infrastructure/
+	api/controllers/BetController.ts
+	api/dtos/BetDTOs.ts
+	api/routes/betRoutes.ts
+	cache/cacheHooks.ts (invalidação de odds)
+```
+
+- **Domain** reúne regras e invariantes (entidades, value objects, repositórios, serviço).
+- **Application** expõe os casos de uso e mapeia erros de domínio via `executeWithBetErrorMapping`.
+- **Infraestrutura** publica rotas HTTP com autenticação, cache Redis e rate limits específicos.
+- **Config** (`src/core/betting/config/bet.ts`) cria o grafo de dependências para scripts e workers.
+
+## Modelo de domínio
+
+### Entidades
+
+- `Bet` (`domain/entities/Bet.ts`)
+	- Campos: `id`, `userId`, `eventId`, `marketId`, `amount: BetAmount`, `odds: Odds`, `status`, `type`, `createdAt`, `resolvedAt?`, `cancellationReason?`.
+	- Métodos: `resolve(result)`, `cancel(reason)`, `potentialReturn` (usa `Odds.calculatePotentialReturn`).
+	- Regras: somente apostas `PENDING` podem ser resolvidas/canceladas; validações de IDs e datas lançam `DomainError`.
+
+- `Event` + `Market` (`domain/entities/Event.ts`)
+	- Um `Event` mantém `markets: Map<string, Market>`; apenas eventos `SCHEDULED` aceitam apostas ou inclusão de novos mercados.
+	- `Market` controla status (`OPEN`, `SUSPENDED`, `CLOSED`), resultado e coleção de odds (`Map<string, Odds>`), bloqueando updates quando o mercado não está aberto.
+
+### Value Objects
+
+- `BetAmount` valida valores positivos e restringe moedas suportadas.
+- `Odds` valida cotações > 0 e expõe helpers de cálculo de retorno.
+
+### DTOs e tipos (`types/bet.types.ts`)
+
+- `ICreateBetDTO`, `ICancelBetDTO`, `IResolveBetDTO` descrevem as entradas dos casos de uso.
+- Aliases (`BetStatus`, `BetType`, `EventStatus`, `MarketStatus`, `OddStatus`) padronizam estados entre camadas.
+
+## Serviços e casos de uso
+
+- **BetService** (`domain/services/BetService.ts`)
+	- `placeBet`: valida evento/mercado/odd via `IEventRepository`, chama `IWalletService.withdraw` e persiste com `IBetRepository`.
+	- `cancelBet`: garante evento `SCHEDULED`, marca a aposta como `CANCELED`, devolve fundos (`WalletService.deposit`) e atualiza o repositório.
+	- `resolveBet`: muda status para `WON`/`LOST`, credita o pagamento quando aplicável e atualiza o estado.
+	- Leituras: `getUserBets`, `getEventBets`.
+
+- **Casos de uso** (`aplication/use-cases/*.ts`)
+	- `PlaceBetUseCase`, `CancelBetUseCase`, `ResolveBetUseCase`, `GetUserBetsUseCase`, `GetEventBetsUseCase` apenas orquestram o serviço e aplicam `executeWithBetErrorMapping`.
+	- O mapper converte `DomainError` em `AppError` com status HTTP consistente.
+
+### Integração financeira
+
+O `BetService` consome `WalletService` (`src/core/finance/domain/services/WalletService.ts`) via `IWalletService`.
+
+1. `withdraw(userId, amount)` garante saldo antes de criar a aposta.
+2. `deposit(userId, amount)` devolve fundos após cancelamentos ou paga ganhos em resoluções `WON`.
+3. Evolução futura: utilizar `lock/unlock` para reservas sem débito imediato.
+
+## Persistência e configuração
+
+- **Contratos**: `IBetRepository` e `IEventRepository` descrevem as operações de persistência.
+- **Implementações**:
+	- In-memory (`domain/repositories/*Repository.ts`) usada em desenvolvimento/testes.
+	- `MongooseBetRepository` (`infrastructure/persistence/mongoose/repositories/MongooseBetRepository.ts`) habilitada com `USE_MONGOOSE_PERSISTENCE=true` (decisão feita em `createBetRepository`).
+	- `EventRepository` ainda é apenas in-memory; integrações externas devem seguir `IEventRepository`.
+- **Factory compartilhada**: `src/infrastructure/persistence/factory.ts` garante uma única instância dos repositórios por processo (users, wallets, bets, finance).
+
+## API HTTP
+
+Endpoints definidos em `BetController` e registrados por `betRoutes` sob `/api/bets`.
+
+| Método | Caminho | Autenticação | Rate limit | Observações |
+|--------|---------|--------------|------------|-------------|
+| `GET` | `/api/bets/event/:eventId` | pública | n/a | Usa `cacheEventOddsMiddleware` + Redis e retorna `BetListResponseDTO` por evento.
+| `POST` | `/api/bets` | Bearer (Clerk ou token dev) | `BET_PLACE_RATE_LIMIT_*` | Valida `PlaceBetDTO`, debita carteira e invalida cache do evento.
+| `POST` | `/api/bets/:betId/cancel` | Bearer obrigatório | `BET_CANCEL_RATE_LIMIT_*` | `CancelBetDTO` aceita `reason`; devolve fundos se o evento ainda está `SCHEDULED`.
+| `GET` | `/api/bets/me` | Bearer obrigatório | n/a | Lista apostas do usuário autenticado usando `BetListResponseDTO`.
+
+### DTOs expostos (Zod)
+
+```ts
+export const PlaceBetDTO = z.object({
+	eventId: z.string().uuid(),
+	marketId: z.string(),
+	oddId: z.string(),
+	amount: z.number().positive().min(0.01),
+	type: z.enum(['SINGLE', 'MULTIPLE']).optional().default('SINGLE'),
+	currency: z.enum(['BRL', 'USD', 'EUR']).optional().default('BRL'),
+});
+```
+
+Os schemas alimentam o `swaggerSpec` servido em `/api/docs` e o JSON em `/api/docs.json`.
+
+## Regras de negócio essenciais
+
+- **Criação**: exige saldo, evento `SCHEDULED`, mercado `OPEN`, odd válida e `amount > 0`.
+- **Cancelamento**: permitido apenas antes do início do evento; motivo salvo em `Bet.cancellationReason`.
+- **Resolução**: somente apostas `PENDING`; resultado `WON` credita `potentialReturn`, `LOST` apenas finaliza.
+- **Eventos/mercados**: alterações de status devem ser persistidas via `IEventRepository`; mercados fechados lançam `DomainError`.
+- **Segurança**: autenticação via Clerk (`clerkMiddleware`) ou header Bearer fake em dev; erros retornam `AppError` padronizado.
+
+## Cache, rate-limit e consistência
+
+- `cacheEventOddsMiddleware` + `redisClient` respondem a `GET /event/:eventId` com baixa latência; TTL vem de `cacheTTL.oddsForEvent` (`shared/config/cacheConfig.ts`).
+- Escritas (`placeBet`, `cancelBet`, `resolveBet`) chamam `flushEventOddsCache(eventId)` para evitar dados obsoletos.
+- Rate limits por endpoint vivem em `appConfig.betRateLimit` e são configurados com:
+	- `BET_PLACE_RATE_LIMIT_WINDOW_MS` / `BET_PLACE_RATE_LIMIT_MAX`
+	- `BET_CANCEL_RATE_LIMIT_WINDOW_MS` / `BET_CANCEL_RATE_LIMIT_MAX`
+	- Mensagens customizáveis via `BET_*_RATE_LIMIT_MESSAGE`
+- O middleware `createRouteRateLimiter` usa `X-Forwarded-For` para identificar IP real e retorna `AppError` 429 com detalhes no corpo/log.
+
+## Observabilidade e operação
+
+- **Logs**: `ApiServer` injeta `requestId` e `userId` (quando autenticado) via `AsyncLocalStorage`; erros são estruturados em JSON.
+- **Métricas**: `httpRequestCounter`, `httpRequestLatency`, `httpErrorCounter` e `dependencyHealthGauge` rotulam rota/método/status. `/metrics` expõe os dados para Prometheus.
+- **Health checks**: `/health`, `/readiness`, `/health/cache` validam Redis/Mongo — críticos para endpoints de aposta.
+- **Tracing**: habilitado por `TRACING_ENABLED` e `OTEL_*` (detalhes em `docs/OBSERVABILITY.mdx`), permitindo seguir `BetController → UseCase → BetService → WalletService`.
+
+## Testes e qualidade
+
+- `src/core/betting/aplication/use-cases/__tests__/BetUseCases.test.ts`: garante delegação correta e mapeamento de erros.
+- `src/core/betting/domain/repositories/__tests__/EventRepository.test.ts`: cobre operações do repositório em memória.
+- Para e2e use `supertest` ou `curl` com os endpoints de `/api/bets`; scripts como `src/scripts/seedInitialData.ts` ajudam a gerar usuários/carteiras antes das chamadas.
+- Rode `npm test -- --testPathPattern=betting` para focar somente no módulo.
+
+## Próximos passos sugeridos
+
+1. Implementar `IEventRepository` persistente (MongoDB ou feed externo) para eliminar dependência de fixtures.
+2. Introduzir reservas (`lock/unlock`) no fluxo de criação de apostas (ao invés de saque imediato).
+3. Adicionar validações antifraude (limites por usuário/mercado, fingerprint) e eventos de domínio (`BetPlaced`) publicados no barramento.
+4. Expandir testes de integração cobrindo cache + rate-limit e e2e com Clerk/JWT reais.
+
+---
+
+**Última atualização:** 23 de novembro de 2025

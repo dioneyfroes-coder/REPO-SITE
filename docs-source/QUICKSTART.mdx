@@ -1,545 +1,156 @@
 ---
-title: "Quickstart"
-description: "Guia rápido para instalar, configurar e rodar o BackBet."
+title: "Guia Rápido"
+description: "Passo a passo para preparar, executar e validar o BackBet localmente."
 slug: "/docs/quickstart"
 ---
 
-# Como Rodar o BackBet - Guia Rápido
+# BackBet Quickstart
 
-**Última atualização:** Janeiro 2025 ✅ MongoDB + Mongoose Implementado
+Checklist para sair do zero até um ambiente funcional com saúde/observabilidade verificadas e testes em dia.
 
-## ⚡ Quickstart (30 segundos)
+## 1. Pré-requisitos
 
-### 1. Instalar Dependências
+- Node.js **20.x** (18 funciona, mas todas as automações rodam em 20) e npm **10+**
+- Git + `tsc` (instalado via `npm install`)
+- Docker 24+ (opcional, mas recomendado para MongoDB/Redis)
+- Porta `3000` livre (override via `PORT`)
+
+## 2. Clone e dependências
+
 ```bash
+git clone https://github.com/<sua-org>/backbet.git
+cd backbet
 npm install
 ```
 
-### 2. Configurar MongoDB
+> Sempre use `npm install` (o projeto usa lockfile npm). `npm ci` é recomendado em CI/CD.
 
-**Opção A: MongoDB Local**
+## 3. Variáveis de ambiente
+
 ```bash
-# macOS (Homebrew)
-brew install mongodb-community
-brew services start mongodb-community
-
-# Linux (systemd)
-sudo systemctl start mongod
-
-# Windows
-# Baixar de https://www.mongodb.com/try/download/community
+cp .env.example .env
 ```
 
-**Opção B: MongoDB Atlas (Cloud - Grátis)**
-1. Criar conta em https://www.mongodb.com/cloud/atlas/register
-2. Criar cluster M0 (free tier)
-3. Obter connection string
+Ajuste os principais toggles:
 
-### 3. Configurar Variáveis de Ambiente
+| Variável | O que faz | Valor típico em dev |
+|----------|-----------|---------------------|
+| `NODE_ENV` | Ambiente lógico | `development` |
+| `PORT` | Porta HTTP | `3000` |
+| `USE_MONGOOSE_PERSISTENCE` | Liga repositórios Mongo/Mongoose | `false` se quiser in-memory |
+| `MONGODB_URI` / `MONGODB_DB_NAME` | Conexão Mongo | `mongodb://localhost:27017` / `backbet-dev` |
+| `CACHE_ENABLED` / `REDIS_URL` | Libera cache Redis + métricas | `false` quando não houver Redis |
+| `ALLOW_DEV_BEARER_BYPASS` | Permite `Authorization: Bearer <userId>` sem JWT | `true` | 
+| `CLERK_*` | Credenciais Clerk | Use valores reais só em staging/prod |
+| `JWT_*` | Segredo/local auth | Necessário para `/auth/login` e `/auth/refresh` |
+| `RATE_LIMIT_*` | Rate limit global | Defaults altos (5k req/10 min) |
+| `TRACING_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry | Ative apenas se tiver collector |
 
-Criar arquivo `.env` na raiz:
+> Nunca versione `.env`. Para CI, configure secrets no provedor.
 
-```env
-# MongoDB
-USE_MONGOOSE_PERSISTENCE=true
-MONGODB_URI=mongodb://localhost:27017
-MONGODB_DB_NAME=backbet-dev
+## 4. Dependências locais (Mongo + Redis)
 
-# Ambiente
-NODE_ENV=development
+Suba containers rápidos (pode usar Compose ou comandos simples):
 
-# Clerk (opcional em dev)
-CLERK_PUBLISHABLE_KEY=pk_test_seu_publishable_key
-CLERK_SECRET_KEY=sk_test_seu_secret_key
-
-# Servidor
-PORT=3000
-CORS_ORIGIN=http://localhost:3000,http://localhost:3001,http://localhost:5173
-LOG_LEVEL=debug
-```
-
-**Para usar in-memory (sem MongoDB):**
-```env
-USE_MONGOOSE_PERSISTENCE=false
-```
-
-### 4. Rodar Servidor
 ```bash
-# Desenvolvimento (watch mode)
+docker run -d --name backbet-mongo -p 27017:27017 mongo:7
+docker run -d --name backbet-redis -p 6379:6379 redis:7
+```
+
+Deseja Compose?
+
+```yaml
+services:
+  mongo:
+    image: mongo:7
+    ports: ["27017:27017"]
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+```
+
+> Sem Mongo? defina `USE_MONGOOSE_PERSISTENCE=false`. Sem Redis? `CACHE_ENABLED=false`.
+
+## 5. Executar em desenvolvimento
+
+```bash
 npm run dev
-
-# Produção
-npm run build
-npm start
 ```
 
-Você verá:
-```
-✓ MongoDB conectado com sucesso
-🚀 BackBet API rodando em http://localhost:3000
-📚 Swagger: http://localhost:3000/api/docs
-```
+- Usa `tsx watch src/index.ts` com reload automático.
+- O bootstrap (`src/index.ts`) inicia tracing antes de carregar o `ApiServer`.
+- Logs são JSON com `request_start`/`request_end`/`request_error` e sempre incluem `requestId`.
 
-### 5. Testar
-```bash
-curl http://localhost:3000/health
+### Endpoints importantes
 
-# Deve retornar:
-{"status":"healthy","timestamp":"...","uptime":2.345}
-```
+| URL | Descrição |
+|-----|-----------|
+| `GET /health` | Heartbeat e uptime |
+| `GET /readiness` | Consulta Redis/Mongo, atualiza gauges `backbet_dependency_health` |
+| `GET /health/cache` | Exibe métricas internas do `RedisClient` |
+| `GET /metrics` | Prometheus/OpenMetrics |
+| `GET /api/docs` | Swagger UI |
+| `GET /api/docs.json` | OpenAPI 3.1 |
 
-✅ **Pronto!** Servidor funcionando com MongoDB
+## 6. Scripts essenciais
 
----
+| Comando | Uso |
+|---------|-----|
+| `npm run dev` | Desenvolvimento com hot reload |
+| `npm run build` | `tsc` + `tsc-alias` para `dist/` |
+| `npm start` | Executa `dist/index.js` (produção/staging) |
+| `npm test` | 350 testes (unit + integração leve) |
+| `npm run test -- --coverage` | Relatório completo de cobertura |
+| `npm run lint` / `npm run lint:fix` | ESLint 9 + `@typescript-eslint` |
+| `npm run format` | Prettier |
+| `npm run migration:run` | Runner de migrations (Mongo) |
+| `npm run seed:initial` / `npm run seed:credit-packages` | Seeds utilitários |
 
-Autenticação - Modo Desenvolvimento
+## 7. Smoke test rápido
 
-Em desenvolvimento, o servidor **não requer** chaves reais do Clerk!
-
-### Registrar Usuário
-```bash
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "test@example.com",
-    "firstName": "Test",
-    "lastName": "User",
-    "username": "testuser",
-    "password": "SecurePass123!"
-  }'
-```
-
-Você receberá um `id` (UUID). Copie-o!
-
-### Autenticar (Bearer Token)
-```bash
-curl -H "Authorization: Bearer {USER_ID}" \
-  http://localhost:3000/api/auth/me
-
-# Deve retornar os dados do usuário
-```
-
----
-
-Configuração
-
-### Arquivo `.env` (Desenvolvimento)
-```properties
-NODE_ENV=development
-CLERK_PUBLISHABLE_KEY=pk_test_Y2xlcmsuYWNjb3VudHMuZGV2
-CLERK_SECRET_KEY=sk_test_local_development_only
-CORS_ORIGIN=http://localhost:3000,http://localhost:3001,http://localhost:5173
-LOG_LEVEL=debug
-```
-
-⚠️ **Para Produção:**
-1. Obter chaves reais em https://dashboard.clerk.com
-2. Atualizar `.env` com chaves reais
-3. Remover "sk_test" do `CLERK_SECRET_KEY`
-4. Reiniciar servidor
-
----
-
-## 🧪 Testes
+Após `npm run dev` ou `npm start`:
 
 ```bash
-# Rodar todos os testes
-npm test
-
-# Com cobertura detalhada
-npm test -- --coverage
-
-# Rodar apenas testes de um núcleo
-npm test -- user
-npm test -- finance
-npm test -- betting
-
-# Resultado esperado:
-# Testes: 159 passando (14 suites)
-# Cobertura:
-#   - Overall: 66.37%
-#   - User Core: 100%
-#   - Finance Core: 100%
-#   - Betting Core: ~20%
-#   - Infrastructure: 51-85%
+curl -sf http://localhost:3000/health
+curl -sf http://localhost:3000/readiness
+curl -sf http://localhost:3000/api/docs.json | head -n 20
+curl -sf http://localhost:3000/metrics | head -n 20
 ```
 
----
-
-## 📊 Cobertura Atual
-
-| Módulo | Testes | Coverage |
-|--------|--------|----------|
-| User Core | 25+ | ✅ 100% |
-| Finance Core | 60+ | ✅ 100% |
-| Betting Core | 10+ | 🟡 ~20% |
-| Shared/Infrastructure | 60+ | 🟡 51-85% |
-| **Total** | **159** | **66.37%** |
-
----
-
-Estrutura do Projeto
-
-```
-src/
-├── core/                          # Domínio de negócios (DDD)
-│   ├── user/                      # Contexto: Usuários
-│   │   ├── domain/
-│   │   │   ├── entities/          # User entity
-│   │   │   ├── repositories/      # UserRepository interface
-│   │   │   ├── services/          # UserService
-│   │   │   └── value-objects/     # Email value object
-│   │   └── application/
-│   │       └── use-cases/         # RegisterUser use case
-│   ├── finance/                   # Contexto: Finanças/Carteira
-│   └── betting/                   # Contexto: Apostas (futuro)
-├── infrastructure/
-│   └── api/
-│       ├── controllers/           # AuthController, etc
-│       ├── routes/                # authRoutes factory
-│       ├── middleware/            # AuthMiddleware
-│       ├── dtos/                  # AuthDTOs (Zod schemas)
-│       └── ApiServer.ts           # Express configuration
-├── shared/                        # Código compartilhado
-│   └── domain/
-│       ├── entities/              # AggregateRoot, BaseEntity
-│       └── value-objects/         # Money, UniqueId
-└── server.ts                      # Entry point
-```
-
----
-
-Endpoints Disponíveis
-
-Autenticação (Implementado)
-```
-POST   /api/auth/register          # Criar conta
-POST   /api/auth/login             # Login (Clerk OAuth)
-GET    /api/auth/me                # Dados do usuário (protegido)
-POST   /api/auth/logout            # Logout (protegido)
-POST   /api/auth/refresh           # Renovar token
-GET    /health                     # Health check
-GET    /readiness                  # Readiness check
-```
-
-Em Desenvolvimento (Phase 2)
-```
-GET    /api/users/me               # Perfil do usuário
-PATCH  /api/users/me               # Atualizar perfil
-PATCH  /api/users/me/email         # Mudar email
-DELETE /api/users/me               # Deletar conta
-GET    /api/wallets/me             # Saldo da carteira
-POST   /api/wallets/deposit        # Depositar
-POST   /api/wallets/withdraw       # Sacar
-GET    /api/wallets/me/history     # Histórico de transações
-```
-
----
-
-Desenvolvimento
-
-### Scripts Disponíveis
+Cache habilitado?
 
 ```bash
-npm run build
-
-# Rodar servidor (requer build antes)
-npm start
-
-# Rodar testes
-npm test
-
-# Rodar testes com coverage
-npm test -- --coverage
-
-# Verificar tipos TypeScript
-npx tsc --noEmit
-
-# Lint (ESLint, se configurado)
-npm run lint
+curl -sf http://localhost:3000/health/cache
 ```
 
----
+## 8. Testes, qualidade e build
 
-Troubleshooting
+1. `npm run lint`
+2. `npm run test -- --coverage`
+3. `npm run build`
 
-| Problema | Solução |
-|----------|---------|
-| `Publishable key is missing` | Já resolvido! Verifique se `.env` existe e `npm run build` completou |
-| Porta 3000 já em uso | Mude `PORT=3001` em `.env` ou mate o processo: `lsof -i :3000 \| kill -9` |
-| 404 em `/api/auth/*` | Verifique se `/api` está no prefixo da URL |
-| Testes falhando | Rode `npm test -- --clearCache` |
-| Módulos não encontrados | Rode `npm install` novamente |
+> Essa trinca é obrigatória antes de qualquer PR. `npm run build && npm start` garante que o bundle em `dist/` funciona.
 
----
+## 9. Troubleshooting
 
-Próximas Fases
+| Sintoma | Correção |
+|---------|----------|
+| `Cannot find module` ao rodar `npm start` | Remova `dist/` e refaça `npm run build`. Confirme `npm install` e tsconfig correto. |
+| `ERR_UNKNOWN_FILE_EXTENSION` | Garanta que `package.json` **não** tenha `"type": "module"`. |
+| `MongoNetworkError` | Suba Mongo (`docker ps`), revise URI ou use `USE_MONGOOSE_PERSISTENCE=false`. |
+| `Redis connection refused` | Corrija `REDIS_URL` ou desligue cache (`CACHE_ENABLED=false`). |
+| `CLERK_*` faltando | Use chaves reais ou habilite `ALLOW_DEV_BEARER_BYPASS` (apenas em dev/test). |
+| Testes instáveis | `npm test -- --clearCache && npm test`. Confira se serviços externos não estão caindo. |
+| Porta 3000 ocupada | Ajuste `PORT` ou finalize processo (`lsof -i :3000`). |
 
-### Sprint 1 - Phase 2 (Em Desenvolvimento)
-- [ ] Controllers para User (update profile, change email, etc)
-- [ ] Controllers para Wallet (deposit, withdraw, history)
-- [ ] Testes E2E para fluxos completos
-- [ ] Documentação Swagger/OpenAPI
+## 10. Próximos passos
 
-### Sprint 1 - Phase 3 (Futuro)
-- [ ] Integração com banco de dados PostgreSQL
-- [ ] Rate limiting
-- [ ] Logging centralizado
-- [ ] Testes de segurança
-
-### Sprint 2 (Futuro)
-- [ ] Contexto de Apostas/Betting
-- [ ] Sistema de notificações
-- [ ] WebSockets para atualizações em tempo real
+1. Rodar `npm run lint && npm run test -- --coverage && npm run build` antes de commitar.
+2. Atualizar documentação do módulo tocado em `docs/*.mdx` quando necessário.
+3. Em staging/prod: ative Redis real, conecte Mongo definitivo, defina `CLERK_*`, configure OTLP (`TRACING_ENABLED=true` + `OTEL_EXPORTER_OTLP_ENDPOINT`) e proteja `/metrics`/`/readiness` via proxy.
 
 ---
 
-Segurança
+**Última atualização:** 23 de novembro de 2025
 
-### Desenvolvimento
-- ✅ HTTPS não requerido
-- ✅ Autenticação via Bearer token simplificada
-- ✅ CORS habilitado para localhost
-
-### Produção
-- ✅ Clerk OAuth 2.0 com JWT
-- ✅ Helmet para segurança de headers
-- ✅ CORS configurado apenas para origens permitidas
-- ✅ Rate limiting (futuro)
-- ✅ Validação com Zod em todos endpoints
-
----
-
-Métricas Atuais
-
-| Métrica | Valor |
-|---------|-------|
-| Testes | 150/150 ✅ |
-| Cobertura | 100% ✅ |
-| Build | 0 erros ✅ |
-| Endpoints | 7 funcionando ✅ |
-| Node.js | 20.19.4+ ✅ |
-| TypeScript | 5.9.3 ✅ |
-
----
-
-Arquitetura
-
-### Domain-Driven Design (DDD)
-- **3 Bounded Contexts**: User, Finance, Betting
-- **Shared Domain**: Entidades base, Value Objects, Repositórios
-- **Clean Architecture**: Camadas separadas (Controllers → Services → Repositories)
-
-### Padrões Utilizados
-- **Repository Pattern**: Abstração de acesso a dados
-- **Service Pattern**: Lógica de negócio
-- **DTO Pattern**: Validação com Zod
-- **Factory Pattern**: Criação de rotas e serviços
-
----
-
-Suporte
-
-Se algo não funcionar:
-
-1. Verifique se `.env` existe na raiz
-2. Rode `npm install` para garantir dependências
-3. Rode `npm run build` para compilar
-4. Rode `npm test` para verificar ambiente
-5. Verifique logs em `/tmp/server.log` (se rodou com `npm start` via nohup)
-
----
-
-**Última revisão:** 14 de Novembro de 2025
-**Status:** ✅ Pronto para uso em desenvolvimento
-
-# Executar testes
-npm test
-
-# Testes em watch mode
-npm test:watch
-
-# Testes com cobertura
-npm test:coverage
-
-# Verificar lint
-npm run lint
-
-# Corrigir lint automaticamente
-npm run lint:fix
-
-# Formatar código
-npm run format
-```
-
-### Fluxo de Desenvolvimento
-
-```bash
-npm run build
-
-# 2. Em outro terminal, rodar servidor
-npm start
-
-# 3. Em outro terminal, rodar testes em watch mode
-npm test:watch
-
-# 4. Desenvolver normalmente
-# - Editar arquivos TypeScript
-# - Testes recompilam automaticamente
-# - Ao salvar, testes passam/falham
-
-# 5. Quando terminar, fazer rebuild
-npm run build
-```
-
----
-
-Testar Endpoints
-
-### Health Check
-```bash
-```
-
-### Registrar Usuário
-```bash
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "teste@example.com",
-    "password": "Senha123!",
-    "username": "usuario_teste",
-    "firstName": "João",
-    "lastName": "Silva"
-  }'
-```
-
-### Obter Perfil (com autenticação)
-```bash
-  -H "Authorization: Bearer seu_token_aqui"
-```
-
----
-
-️ Estrutura do Projeto
-
-```
-BackBet/
-├── src/
-│   ├── server.ts                    # Entry point
-│   ├── core/                        # Domínios principais
-│   │   ├── user/                   # Núcleo de usuários
-│   │   ├── finance/                # Núcleo de finanças
-│   │   ├── betting/                # Núcleo de apostas
-│   │   └── shared/                 # Código compartilhado
-│   └── infrastructure/              # Implementações
-│       └── api/                     # Express routes e controllers
-├── dist/                            # Build compilado (gerado)
-├── package.json                     # Dependências
-├── tsconfig.json                    # Configuração TypeScript
-├── jest.config.js                   # Configuração de testes
-├── .env.example                     # Variáveis de exemplo
-└── .env                             # Variáveis locais (não commitar)
-```
-
----
-
-Troubleshooting
-
-### Erro: "Cannot find module"
-```bash
-rm -rf dist/
-npm run build
-npm start
-```
-
-### Erro: "ERR_UNKNOWN_FILE_EXTENSION"
-- ✓ Já foi corrigido
-- Se persistir, verificar se package.json NÃO tem `"type": "module"`
-
-### Erro: "CLERK_PUBLISHABLE_KEY is missing"
-- Verificar se `.env` foi criado
-- Verificar se as variáveis Clerk foram adicionadas
-- Usar `.env.example` como referência
-
-### Testes falhando
-```bash
-npm test -- --clearCache
-npm test
-```
-
-### Porta 3000 já está em uso
-```bash
-PORT=3001
-
-# Ou matar processo
-lsof -i :3000
-kill -9
-```
-
----
-
-Documentação
-
-- **** - Configuração de autenticação
-- **** - Documentação de endpoints
-- **** - Plano de produção
-- **** - Status atual do sprint
-- **** - Arquitetura DDD
-
----
-
-Checklist Antes de Fazer Push
-
-```bash
-npm run build
-
-# 2. Testes passando
-npm test
-
-# 3. Sem warnings de lint
-npm run lint
-
-# 4. Formatar código
-npm run format
-
-# 5. Verificar status
-git status
-
-# 6. Fazer commit
-git add -A
-git commit -m "tipo: descrição da mudança"
-
-# 7. Push
-git push origin main
-```
-
----
-
-Próximos Passos
-
-1. **Completar Sprint 1 (Semana 2)**
-   - Controllers de usuário
-   - Controllers de finanças
-   - Testes E2E
-
-2. **Sprint 2 - Banco de Dados**
-   - Configurar PostgreSQL
-   - Implementar migrations
-   - Trocar repositórios em memória
-
-3. **Sprint 3 - Expandir API**
-   - Eventos e apostas
-   - Testes de integração
-
----
-
-Precisa de Ajuda?
-
-1. Verificar  para questões de autenticação
-2. Verificar  para endpoints
-3. Consultar  para status
-4. Abrir issue no repositório
-
----
-
-**Última atualização:** 14 de Novembro de 2025
-
-Boa sorte! 🚀
+Boa jornada e bons commits! 🚀
